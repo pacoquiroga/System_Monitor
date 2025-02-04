@@ -1,0 +1,27 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Monitor del Sistema</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.4.1/socket.io.js"></script>
+</head>
+<body>
+    <h1>Monitor del Sistema</h1>
+    <p>CPU: <span id="cpu">0%</span></p>
+    <p>Memoria: <span id="memory">0%</span></p>
+    <p>Disco: <span id="disk">0%</span></p>
+    <p>Red enviada: <span id="network">0 MB</span></p>
+
+    <script>
+        var socket = io.connect("http://localhost:5000");
+
+        socket.on("update_metrics", function(data) {
+            document.getElementById("cpu").innerText = data.cpu + "%";
+            document.getElementById("memory").innerText = data.memory + "%";
+            document.getElementById("disk").innerText = data.disk + "%";
+            document.getElementById("network").innerText = data.network.toFixed(2) + " MB";
+        });
+    </script>
+</body>
+</html>
