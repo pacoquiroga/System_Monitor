@@ -8,19 +8,119 @@
 </head>
 <body>
     <h1>Monitor del Sistema</h1>
-    <p>CPU: <span id="cpu">0%</span></p>
-    <p>Memoria: <span id="memory">0%</span></p>
-    <p>Disco: <span id="disk">0%</span></p>
-    <p>Red enviada: <span id="network">0 MB</span></p>
+
+    <!-- Información CPU -->
+    <h3>CPU</h3>
+    <p>CPU: <span id="cpu_percent">0%</span></p>
+    <p>Nucleos Físicos <span id="cpu_count">0</span> </p>
+    <p>Nucleos Lógicos <span id="cpu_logical_count">0</span> </p>
+    <p>CPU User: <span id="cpu_user">0</span> s</p>
+    <p>CPU System: <span id="cpu_system">0</span> s</p>
+    <p>CPU Idle: <span id="cpu_idle">0</span> s</p>
+    <p>CPU IRQ: <span id="cpu_irq">0</span> s</p>
+    <p>CPU SoftIRQ: <span id="cpu_softirq">0</span> s</p>
+    <p>CPU Min Frequency <span id='cpu_freq_min'>0</span> </p>
+    <p>CPU Max Frequency <span id='cpu_freq_max'>0</span> </p>
+    <p>CPU Current Frequency <span id='cpu_freq_current'>0</span> </p>
+    <p>CPU Temperature <span id="cpu_temp">0</span></p>
+
+    <!-- Información Memoria -->
+    <h3>Memoria</h3>
+    <p>Memoria: <span id="memory_percent">0%</span></p>
+    <p>Memoria Total <span id="memory_total">0</span></p>
+    <p>Memoria Disponible <span id="memory_available">0</span></p>
+    <p>Memoria Usada <span id="memory_used">0</span></p>
+    <p>Memoria Buffer <span id="memory_buffers">0</span> </p>
+    <p>Memoria Cache <span id="memory_cached">0</span> </p>
+    <p>Memoria Compartida <span id="memory_shared">0</span> </p>
+    
+    <!-- Información Disco -->
+    <h3>Disco</h3>
+    <p>Disco: <span id="disk_usage">0%</span></p>
+    <p>Total Disco <span id="disk_total">0</span> </p>
+    <p>Disco Usado <span id="disk_used">0</span> </p>
+    <p>Disco Libre <span id="disk_free">0</span> </p>
+    <p>Disco Lectura <span id="disk_read">0</span> </p>
+    <p>Disco Escritura <span id="disk_write">0</span> </p>
+    <p>Conteo Lectura Disco <span id="disk_read_count">0</span> </p>
+    <p>Conteo Escritura Disco <span id="disk_write_count">0</span> </p>
+    <p>Tiempo de Lectura Disco <span id="disk_read_time">0</span> </p>
+    <p>Tiempo de Escritura Disco <span id="disk_write_time">0</span> </p>
+
+    <!-- Información Red -->
+    <h3>Red</h3>
+    <div id="network_info">
+        <!-- Información por cada interfaz de red -->
+    </div>
 
     <script>
         var socket = io.connect("http://localhost:5000");
 
-        socket.on("update_metrics", function(data) {
-            document.getElementById("cpu").innerText = data.cpu + "%";
-            document.getElementById("memory").innerText = data.memory + "%";
-            document.getElementById("disk").innerText = data.disk + "%";
-            document.getElementById("network").innerText = data.network.toFixed(2) + " MB";
+        // 🔹 Escuchar métricas de CPU
+        socket.on("update_cpu", function(data) {
+            document.getElementById("cpu_percent").innerText = data.cpu_percent + "%";
+            document.getElementById("cpu_count").innerText = data.cpu_count;
+            document.getElementById("cpu_logical_count").innerText = data.cpu_logical_count;
+            document.getElementById("cpu_freq_min").innerText = data.cpu_freq_min + " Hz";
+            document.getElementById("cpu_freq_max").innerText = data.cpu_freq_max + " Hz";
+            document.getElementById("cpu_freq_current").innerText = data.cpu_freq_current + " Hz";
+            document.getElementById("cpu_user").innerText = data.cpu_user;
+            document.getElementById("cpu_system").innerText = data.cpu_system;
+            document.getElementById("cpu_idle").innerText = data.cpu_idle;
+            document.getElementById("cpu_irq").innerText = data.cpu_irq ?? "N/A";
+            document.getElementById("cpu_softirq").innerText = data.cpu_softirq ?? "N/A";
+            document.getElementById("cpu_temp").innerText = data.cpu_temp ?? "N/A";
+        });
+
+        // 🔹 Escuchar métricas de Memoria
+        socket.on("update_memory", function(data) {
+            document.getElementById("memory_percent").innerText = data.memory_percent + "%";
+            document.getElementById("memory_total").innerText = data.memory_total + " bytes";
+            document.getElementById("memory_available").innerText = data.memory_available + " bytes";
+            document.getElementById("memory_used").innerText = data.memory_used + " bytes";
+            document.getElementById("memory_buffers").innerText = data.memory_buffers + " bytes";
+            document.getElementById("memory_cached").innerText = data.memory_cached + " bytes";
+            document.getElementById("memory_shared").innerText = data.memory_shared + " bytes";
+        });
+
+        // 🔹 Escuchar métricas de Disco
+        socket.on("update_disk", function(data) {
+            document.getElementById("disk_usage").innerText = data.disk_usage + "%";
+            document.getElementById("disk_total").innerText = data.disk_total + " bytes";
+            document.getElementById("disk_used").innerText = data.disk_used + " bytes";
+            document.getElementById("disk_free").innerText = data.disk_free + " bytes";
+            document.getElementById("disk_read").innerText = data.disk_read + " bytes";
+            document.getElementById("disk_write").innerText = data.disk_write + " bytes";
+            document.getElementById("disk_read_count").innerText = data.disk_read_count;
+            document.getElementById("disk_write_count").innerText = data.disk_write_count;
+            document.getElementById("disk_read_time").innerText = data.disk_read_time + " ms";
+            document.getElementById("disk_write_time").innerText = data.disk_write_time + " ms";
+        });
+
+        // 🔹 Escuchar métricas de Red
+        socket.on("update_network", function(data) {
+            var networkInfo = document.getElementById("network_info");
+            networkInfo.innerHTML = '';  // Limpiar la información anterior
+
+            // Iterar sobre las interfaces de red
+            data.forEach(function(interface) {
+                var div = document.createElement("div");
+                div.innerHTML = `
+                    <h4>Interfaz: ${interface.name}</h4>
+                    <p>IP: ${interface.ip_address}</p>
+                    <p>MAC: ${interface.mac_address}</p>
+                    <p>Velocidad: ${interface.speed} Mbps</p>
+                    <p>Bytes Enviados: ${interface.network_sent}</p>
+                    <p>Bytes Recibidos: ${interface.network_recv}</p>
+                    <p>Paquetes Enviados: ${interface.network_sent_packets}</p>
+                    <p>Paquetes Recibidos: ${interface.network_recv_packets}</p>
+                    <p>Errores Enviados: ${interface.network_sent_errs}</p>
+                    <p>Errores Recibidos: ${interface.network_recv_errs}</p>
+                    <p>Drop Enviados: ${interface.network_dropin}</p>
+                    <p>Drop Recibidos: ${interface.network_dropout}</p>
+                `;
+                networkInfo.appendChild(div);
+            });
         });
     </script>
 </body>
