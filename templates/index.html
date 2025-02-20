@@ -5,6 +5,23 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Monitor del Sistema</title>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.4.1/socket.io.js"></script>
+    <style>
+        .process-table {
+            margin-bottom: 20px;
+        }
+        table {
+            width: 100%;
+            border-collapse: collapse;
+        }
+        th, td {
+            border: 1px solid #ddd;
+            padding: 8px;
+            text-align: left;
+        }
+        th {
+            background-color: #f2f2f2;
+        }
+    </style>
 </head>
 <body>
     <h1>Monitor del Sistema</h1>
@@ -47,10 +64,69 @@
     <p>Tiempo de Lectura Disco <span id="disk_read_time">0</span> </p>
     <p>Tiempo de Escritura Disco <span id="disk_write_time">0</span> </p>
 
-    <!-- Información Red -->
     <h3>Red</h3>
-    <div id="network_info">
-        <!-- Información por cada interfaz de red -->
+    <div id="network_interfaces"></div>
+
+
+    <!-- Sección de Procesos -->
+    <h3>Procesos Activos</h3>
+
+    <!-- Procesos en Primer Plano -->
+    <h4>Primer Plano</h4>
+    <div class="process-table">
+        <table>
+            <thead>
+                <tr>
+                    <th>PID</th>
+                    <th>Nombre</th>
+                    <th>Estado</th>
+                    <th>CPU (%)</th>
+                    <th>Memoria RSS</th>
+                    <th>Memoria VMS</th>
+                    <th>Tiempo de Creación</th>
+                </tr>
+            </thead>
+            <tbody id="foreground_processes">
+                <!-- Filas de procesos en primer plano se insertarán aquí -->
+            </tbody>
+        </table>
+    </div>
+
+    <!-- Procesos en Segundo Plano -->
+    <h4>Segundo Plano</h4>
+    <div class="process-table">
+        <table>
+            <thead>
+                <tr>
+                    <th>PID</th>
+                    <th>Nombre</th>
+                    <th>Estado</th>
+                    <th>CPU (%)</th>
+                    <th>Memoria RSS</th>
+                    <th>Memoria VMS</th>
+                    <th>Tiempo de Creación</th>
+                </tr>
+            </thead>
+            <tbody id="background_processes">
+                <!-- Filas de procesos en segundo plano se insertarán aquí -->
+            </tbody>
+        </table>
+    </div>
+
+
+    <!-- Sección de Batería -->
+    <h3>Batería</h3>
+    <div id="battery_info">
+        <p>Porcentaje de carga: <span id="battery_percent">N/A</span></p>
+        <p>Estado: <span id="battery_plugged">N/A</span></p>
+        <p>Tiempo restante: <span id="battery_secsleft">N/A</span></p>
+    </div>
+
+    <!-- Sección de Temperatura -->
+    <h3>Temperatura</h3>
+    <div id="temperature_info">
+        <p>Temperatura CPU: <span id="cpu_temp">N/A</span> °C</p>
+        <p>Temperatura GPU: <span id="gpu_temp">N/A</span> °C</p>
     </div>
 
     <script>
@@ -97,31 +173,112 @@
             document.getElementById("disk_write_time").innerText = data.disk_write_time + " ms";
         });
 
-        // 🔹 Escuchar métricas de Red
-        socket.on("update_network", function(data) {
-            var networkInfo = document.getElementById("network_info");
-            networkInfo.innerHTML = '';  // Limpiar la información anterior
+        function createInterfaceHTML(interfaceName) {
+            return `
+                <div class="network-interface" id="${interfaceName}_info">
+                    <h4>Interfaz: ${interfaceName}</h4>
+                    <p>Estado: <span id="${interfaceName}_status">N/A</span></p>
+                    <p>IP: <span id="${interfaceName}_ip">N/A</span></p>
+                    <p>MAC: <span id="${interfaceName}_mac">N/A</span></p>
+                    <p>Velocidad: <span id="${interfaceName}_speed">N/A</span> Mbps</p>
+                    <p>Bytes Enviados: <span id="${interfaceName}_sent">0</span> bytes</p>
+                    <p>Bytes Recibidos: <span id="${interfaceName}_recv">0</span> bytes</p>
+                    <p>Paquetes Enviados: <span id="${interfaceName}_packets_sent">0</span></p>
+                    <p>Paquetes Recibidos: <span id="${interfaceName}_packets_recv">0</span></p>
+                    <p>Errores Envío: <span id="${interfaceName}_errs_sent">0</span></p>
+                    <p>Errores Recepción: <span id="${interfaceName}_errs_recv">0</span></p>
+                    <p>Paquetes Perdidos Envío: <span id="${interfaceName}_drop_sent">0</span></p>
+                    <p>Paquetes Perdidos Recepción: <span id="${interfaceName}_drop_recv">0</span></p>
+                </div>
+            `;
+        }
 
-            // Iterar sobre las interfaces de red
-            data.forEach(function(interface) {
-                var div = document.createElement("div");
-                div.innerHTML = `
-                    <h4>Interfaz: ${interface.name}</h4>
-                    <p>IP: ${interface.ip_address}</p>
-                    <p>MAC: ${interface.mac_address}</p>
-                    <p>Velocidad: ${interface.speed} Mbps</p>
-                    <p>Bytes Enviados: ${interface.network_sent}</p>
-                    <p>Bytes Recibidos: ${interface.network_recv}</p>
-                    <p>Paquetes Enviados: ${interface.network_sent_packets}</p>
-                    <p>Paquetes Recibidos: ${interface.network_recv_packets}</p>
-                    <p>Errores Enviados: ${interface.network_sent_errs}</p>
-                    <p>Errores Recibidos: ${interface.network_recv_errs}</p>
-                    <p>Drop Enviados: ${interface.network_dropin}</p>
-                    <p>Drop Recibidos: ${interface.network_dropout}</p>
+        // Escuchar métricas de Red
+        socket.on("update_network", function(data) {
+            const networkInterfacesDiv = document.getElementById("network_interfaces");
+            networkInterfacesDiv.innerHTML = "";  // Limpiar el contenido anterior
+
+            for (let interfaceName in data) {
+                const interfaceData = data[interfaceName];
+
+                // Crear el HTML para la interfaz si no existe
+                if (!document.getElementById(`${interfaceName}_info`)) {
+                    networkInterfacesDiv.innerHTML += createInterfaceHTML(interfaceName);
+                }
+
+                // Actualizar los datos de la interfaz
+                document.getElementById(`${interfaceName}_status`).innerText = interfaceData.is_up ? "Activo" : "Inactivo";
+                document.getElementById(`${interfaceName}_ip`).innerText = interfaceData.ip_address || "N/A";
+                document.getElementById(`${interfaceName}_mac`).innerText = interfaceData.mac_address || "N/A";
+                document.getElementById(`${interfaceName}_speed`).innerText = interfaceData.speed || "N/A";
+                document.getElementById(`${interfaceName}_sent`).innerText = interfaceData.network_sent || 0;
+                document.getElementById(`${interfaceName}_recv`).innerText = interfaceData.network_recv || 0;
+                document.getElementById(`${interfaceName}_packets_sent`).innerText = interfaceData.network_sent_packets || 0;
+                document.getElementById(`${interfaceName}_packets_recv`).innerText = interfaceData.network_recv_packets || 0;
+                document.getElementById(`${interfaceName}_errs_sent`).innerText = interfaceData.network_sent_errs || 0;
+                document.getElementById(`${interfaceName}_errs_recv`).innerText = interfaceData.network_recv_errs || 0;
+                document.getElementById(`${interfaceName}_drop_sent`).innerText = interfaceData.network_dropout || 0;
+                document.getElementById(`${interfaceName}_drop_recv`).innerText = interfaceData.network_dropin || 0;
+            }
+        });
+
+
+        
+
+    
+        socket.on("update_processes", function(data) {
+            const foregroundBody = document.getElementById("foreground_processes");
+            const backgroundBody = document.getElementById("background_processes");
+
+            // Limpiar las tablas antes de actualizar
+            foregroundBody.innerHTML = "";
+            backgroundBody.innerHTML = "";
+
+            // Actualizar procesos en primer plano
+            data.foreground.forEach(process => {
+                const row = document.createElement("tr");
+                row.innerHTML = `
+                    <td>${process.pid}</td>
+                    <td>${process.name}</td>
+                    <td>${process.status}</td>
+                    <td>${process.cpu_percent.toFixed(2)}</td>
+                    <td>${(process.memory_rss / 1024 / 1024).toFixed(2)} MB</td>
+                    <td>${(process.memory_vms / 1024 / 1024).toFixed(2)} MB</td>
+                    <td>${new Date(process.create_time * 1000).toLocaleString()}</td>
                 `;
-                networkInfo.appendChild(div);
+                foregroundBody.appendChild(row);
+            });
+
+            // Actualizar procesos en segundo plano
+            data.background.forEach(process => {
+                const row = document.createElement("tr");
+                row.innerHTML = `
+                    <td>${process.pid}</td>
+                    <td>${process.name}</td>
+                    <td>${process.status}</td>
+                    <td>${process.cpu_percent.toFixed(2)}</td>
+                    <td>${(process.memory_rss / 1024 / 1024).toFixed(2)} MB</td>
+                    <td>${(process.memory_vms / 1024 / 1024).toFixed(2)} MB</td>
+                    <td>${new Date(process.create_time * 1000).toLocaleString()}</td>
+                `;
+                backgroundBody.appendChild(row);
             });
         });
+
+        // Escuchar métricas de Batería
+        socket.on("update_battery", function(data) {
+            document.getElementById("battery_percent").innerText = data.battery_percent + "%";
+            document.getElementById("battery_plugged").innerText = data.battery_plugged;
+            document.getElementById("battery_secsleft").innerText = data.battery_secsleft;
+        });
+
+        // Escuchar métricas de Temperatura
+        socket.on("update_temperature", function(data) {
+            document.getElementById("cpu_temp").innerText = data.cpu_temp;
+            document.getElementById("gpu_temp").innerText = data.gpu_temp;
+        });
+
     </script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.4.1/socket.io.js"></script>
 </body>
 </html>
