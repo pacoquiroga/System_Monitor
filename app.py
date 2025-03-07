@@ -4,12 +4,16 @@ import psutil
 import socket
 import mysql.connector
 import time 
+import json
+import zlib
+import base64
+from utils import MetricsOptimizer  # Importar la clase MetricsOptimizer
 
 # Configuración de la conexión a MySQL
 db_config = {
     "host": "localhost",
     "user": "root",
-    "password": "12345",
+    "password": "",
     "database": "system_monitor"
 }
 
@@ -20,10 +24,10 @@ last_alert_times = {
 }
 
 # Umbrales críticos
-CRITICAL_CPU = 90  # 90% de uso de CPU
+CRITICAL_CPU = 90  # 90% de uso de SCPU
 CRITICAL_MEMORY = 90  # 90% de uso de memoria
 CRITICAL_DISK = 90  # 90% de uso de disco
-COOLDOWN_TIME = 300
+COOLDOWN_TIME = 10
 
 def check_cpu_usage(cpu_percent):
     if cpu_percent > CRITICAL_CPU:
@@ -84,7 +88,12 @@ def save_alert(resource_type, resource_value, message):
 
 
 app = Flask(__name__)
-socketio = SocketIO(app, cors_allowed_origins="*")
+socketio = SocketIO(app, 
+    cors_allowed_origins="*",
+    async_mode='threading',  # Cambia el modo async
+    ping_timeout=5,         # Reduce el timeout
+    ping_interval=25000     # Ajusta el intervalo de ping
+)
 
 def get_cpu_metrics():
     cpu_times = psutil.cpu_times()
@@ -94,7 +103,7 @@ def get_cpu_metrics():
         temps = psutil.sensors_battery()
 
     return {
-        "cpu_percent": psutil.cpu_percent(interval=0.5) * 10,
+        "cpu_percent": psutil.cpu_percent(interval=0.1),  # Reducido a 0.1 segundos para mediciones más rápidas
         "cpu_count": psutil.cpu_count(logical=False),	
         "cpu_count_logical": psutil.cpu_count(logical=True),
         "cpu_freq_min": cpu_freq.min if cpu_freq.min else "N/A",
@@ -105,7 +114,8 @@ def get_cpu_metrics():
         "cpu_idle": cpu_times.idle,
         "cpu_irq": getattr(cpu_times, "irq", None),
         "cpu_softirq": getattr(cpu_times, "softirq", None),
-        "cpu_temp" : temps 
+        "cpu_temp" : temps,
+        "timestamp": time.time()  # Agregar timestamp para seguimiento
     }
 
 
@@ -221,55 +231,153 @@ def get_battery_metrics():
     }
 
 
+# Función para comprimir datos (reduce la cantidad de datos transferidos)
+def compress_data(data):
+    json_data = json.dumps(data)
+    compressed = zlib.compress(json_data.encode('utf-8'))
+    return base64.b64encode(compressed).decode('ascii')
 
-# def get_temperature_metrics():
-#     temps = psutil.sensors_temperatures()
-#     if not temps:
-#         return {
-#             "cpu_temp": "N/A",
-#             "gpu_temp": "N/A"
-#         }
-    
-#     cpu_temp = "N/A"
-#     gpu_temp = "N/A"
-    
-#     # Obtener temperatura de la CPU
-#     if 'coretemp' in temps:
-#         cpu_temp = max([temp.current for temp in temps['coretemp']])
-    
-#     # Obtener temperatura de la GPU (si está disponible)
-#     if 'amdgpu' in temps:
-#         gpu_temp = max([temp.current for temp in temps['amdgpu']])
-#     elif 'nvidia' in temps:
-#         gpu_temp = max([temp.current for temp in temps['nvidia']])
-    
-#     return {
-#         "cpu_temp": cpu_temp,
-#         "gpu_temp": gpu_temp
-#     }
+# Variables para almacenar datos anteriores y controlar la frecuencia
+last_sent_data = {}
+last_sent_time = {}
+MIN_UPDATE_INTERVAL = {
+    'cpu': 0.5,       # Actualización cada 0.5 segundos (antes 1)
+    'memory': 0.5,    # Actualización cada 0.5 segundos (antes 1)
+    'disk': 2,        # Actualización cada 2 segundos (antes 5)
+    'network': 1,     # Actualización cada 1 segundo (antes 2)
+    'processes': 1.5, # Actualización cada 1.5 segundos (antes 3)
+    'battery': 5      # Actualización cada 5 segundos (antes 10)
+}
 
+# Esta función determina si debemos enviar una actualización basada en el tiempo transcurrido
+def should_update(metric_type, current_time):
+    if metric_type not in last_sent_time:
+        last_sent_time[metric_type] = 0
+        return True
+    
+    return current_time - last_sent_time[metric_type] >= MIN_UPDATE_INTERVAL[metric_type]
 
+# Esta función determina si los datos han cambiado lo suficiente para enviarlos
+def data_changed_significantly(old_data, new_data, metric_type):
+    if metric_type not in last_sent_data:
+        return True
+        
+    # Forzar actualización cada cierto tiempo incluso si no hay cambios significativos
+    force_update_interval = MIN_UPDATE_INTERVAL[metric_type] * 4
+    if new_data.get('timestamp', time.time()) - old_data.get('timestamp', 0) > force_update_interval:
+        return True
+        
+    if metric_type == 'cpu':
+        # Para CPU, enviar si el porcentaje cambió en más de 1% (antes 2%)
+        return abs(new_data.get('cpu_percent', 0) - old_data.get('cpu_percent', 0)) > 1
+    
+    elif metric_type == 'memory':
+        # Para memoria, enviar si el porcentaje cambió en más de 0.5% (antes 1%)
+        return abs(new_data.get('memory_percent', 0) - old_data.get('memory_percent', 0)) > 0.5
+    
+    # Para otros tipos de datos, siempre enviar cuando toca según el intervalo
+    return True
 
 def send_metrics():
+    metrics_optimizer = MetricsOptimizer()  # Crear una instancia del optimizador
+    last_metrics_bundle_time = time.time()  # Para controlar actualizaciones consolidadas
+    
     while True:
-        # Obtener métricas
-        cpu_data = get_cpu_metrics()
-        memory_data = get_memory_metrics()
-        disk_data = get_disk_metrics()
-
-        # Verificar umbrales críticos
-        check_cpu_usage(cpu_data['cpu_percent'])
-        check_memory_usage(memory_data['memory_percent'])
-        check_disk_usage(disk_data['disk_usage'])
-
-        # Enviar métricas al cliente
-        socketio.emit("update_cpu", cpu_data)
-        socketio.emit("update_memory", memory_data)
-        socketio.emit("update_disk", disk_data)
-
-        socketio.sleep(1)  # Esperar 1 segundo antes de la siguiente actualización
-
-
+        # Verificar si hay clientes conectados
+        if len(socketio.server.eio.sockets) == 0:
+            socketio.sleep(0.5)  # Si no hay clientes, esperar menos tiempo
+            continue
+            
+        current_time = time.time()
+        
+        # Recopilar métricas en paralelo utilizando background tasks
+        cpu_data = None
+        memory_data = None
+        disk_data = None
+        network_data = None
+        process_data = None
+        battery_data = None
+        
+        # CPU - Prioridad alta, siempre obtener datos recientes
+        if should_update('cpu', current_time):
+            cpu_data = get_cpu_metrics()
+            if data_changed_significantly(last_sent_data.get('cpu', {}), cpu_data, 'cpu'):
+                # Emitir inmediatamente los datos críticos para mayor fluidez
+                socketio.emit("update_cpu", cpu_data)
+                last_sent_data['cpu'] = cpu_data
+                last_sent_time['cpu'] = current_time
+                
+                # Verificar umbrales críticos
+                check_cpu_usage(cpu_data['cpu_percent'])
+        
+        # Memoria - También prioridad alta
+        if should_update('memory', current_time):
+            memory_data = get_memory_metrics()
+            if data_changed_significantly(last_sent_data.get('memory', {}), memory_data, 'memory'):
+                # Emitir inmediatamente los datos críticos para mayor fluidez
+                socketio.emit("update_memory", memory_data)
+                last_sent_data['memory'] = memory_data
+                last_sent_time['memory'] = current_time
+                
+                # Verificar umbrales críticos
+                check_memory_usage(memory_data['memory_percent'])
+        
+        # Recopilar otras métricas solo cuando sea necesario
+        metrics_bundle = {}
+        
+        # Disco - Menor prioridad
+        if should_update('disk', current_time):
+            disk_data = get_disk_metrics()
+            metrics_bundle['disk'] = disk_data
+            last_sent_data['disk'] = disk_data
+            last_sent_time['disk'] = current_time
+            
+            # Verificar umbrales críticos
+            check_disk_usage(disk_data['disk_usage'])
+        
+        # Red
+        if should_update('network', current_time):
+            network_data = get_network_metrics()
+            metrics_bundle['network'] = network_data
+            last_sent_data['network'] = network_data
+            last_sent_time['network'] = current_time
+        
+        # Procesos
+        if should_update('processes', current_time):
+            process_data = get_process_metrics()
+            metrics_bundle['processes'] = process_data
+            last_sent_data['processes'] = process_data
+            last_sent_time['processes'] = current_time
+        
+        # Batería
+        if should_update('battery', current_time):
+            battery_data = get_battery_metrics()
+            metrics_bundle['battery'] = battery_data
+            last_sent_data['battery'] = battery_data
+            last_sent_time['battery'] = current_time
+        
+        # Enviar métricas menos prioritarias en lote
+        if metrics_bundle and (current_time - last_metrics_bundle_time) >= 0.5:
+            if 'disk' in metrics_bundle:
+                socketio.emit("update_disk", metrics_bundle['disk'])
+            if 'network' in metrics_bundle:
+                socketio.emit("update_network", metrics_bundle['network'])
+            if 'processes' in metrics_bundle:
+                socketio.emit("update_processes", metrics_bundle['processes'])
+            if 'battery' in metrics_bundle:
+                socketio.emit("update_battery", metrics_bundle['battery'])
+            
+            last_metrics_bundle_time = current_time
+        
+        # Utilizar un intervalo de espera dinámico basado en la carga
+        if cpu_data and cpu_data.get('cpu_percent', 0) > 70:
+            # Si la CPU está bajo carga alta, reducir la frecuencia de muestreo
+            sleep_time = 0.3
+        else:
+            # En condiciones normales, muestreo rápido
+            sleep_time = 0.1
+            
+        socketio.sleep(sleep_time)
 
 @app.route("/")
 def index():
@@ -278,8 +386,23 @@ def index():
 @socketio.on("connect")
 def handle_connect():
     """Inicia el envío de métricas cuando un cliente se conecta"""
+    print("Cliente conectado")
+    if not hasattr(app, 'metrics_task_started') or not app.metrics_task_started:
+        socketio.start_background_task(send_metrics)
+        app.metrics_task_started = True
+        
+    # Enviar datos iniciales inmediatamente al conectar
+    initial_data = {
+        'cpu': get_cpu_metrics(),
+        'memory': get_memory_metrics(),
+        'disk': get_disk_metrics()
+    }
+    socketio.emit("initial_data", initial_data)
 
-    socketio.start_background_task(send_metrics)
+@socketio.on("disconnect")
+def handle_disconnect():
+    print("Cliente desconectado")
 
 if __name__ == "__main__":
+    app.metrics_task_started = False
     socketio.run(app, debug=True, host="0.0.0.0", port=5000, use_reloader=False, log_output=True)
